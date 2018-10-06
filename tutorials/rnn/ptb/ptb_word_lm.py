@@ -266,13 +266,14 @@ class SmallConfig(object):
   num_steps = 20
   hidden_size = 200
   max_epoch = 1
-  max_max_epoch = 50
+  max_max_epoch = 20
   keep_prob = 1.0
   lr_decay = 0.5
   batch_size = 20
   vocab_size = 10000
   exp = 1.0
   num_neg_samples = 0
+  loss_func = 'softmax'
 
 
 class MediumConfig(object):
@@ -291,6 +292,7 @@ class MediumConfig(object):
   vocab_size = 10000
   exp = 1.0
   num_neg_samples = 0
+  loss_func = 'softmax'
 
 
 class LargeConfig(object):
@@ -309,6 +311,7 @@ class LargeConfig(object):
   vocab_size = 10000
   exp = 1.0
   num_neg_samples = 0
+  loss_func = 'softmax'
 
 
 class TestConfig(object):
@@ -327,6 +330,7 @@ class TestConfig(object):
   vocab_size = 10000
   exp = 1.0
   num_neg_samples = 20
+  loss_func = 'softmax'
 
 
 class CustomConfig(object):
