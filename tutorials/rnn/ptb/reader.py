@@ -81,9 +81,7 @@ def get_neg_samples(batch_size, num_true, num_sampled, vocab_size, true_classes,
   unigrams = list(unigrams)
   if len(unigrams) < vocab_size:
     unigrams += [0]*(vocab_size-len(unigrams))
-  neg_samples = []
-  for i in range(batch_size):
-    samples, _, _ = tf.nn.fixed_unigram_candidate_sampler(
+  neg_samples, _, _ = tf.nn.fixed_unigram_candidate_sampler(
                   true_classes=true_classes,
                   num_true=num_true,
                   num_sampled=num_sampled,
@@ -92,8 +90,7 @@ def get_neg_samples(batch_size, num_true, num_sampled, vocab_size, true_classes,
                   distortion=0.75,
                   unigrams=unigrams
                )
-    neg_samples.append(tf.reshape(samples, [1, -1]))
-  return tf.stack(neg_samples)
+  return neg_samples
  
 def ptb_producer(raw_data, unigrams, batch_size, num_steps, num_true, num_sampled, vocab_size, name=None):
   """Iterate on the raw PTB data.
@@ -136,9 +133,15 @@ def ptb_producer(raw_data, unigrams, batch_size, num_steps, num_true, num_sample
     y = tf.strided_slice(data, [0, i * num_steps + 1],
                          [batch_size, (i + 1) * num_steps + 1])
     y.set_shape([batch_size, num_steps])
+    '''
     if num_sampled > 0:
-      ns = get_neg_samples(batch_size*num_steps, num_true, num_sampled, vocab_size, tf.reshape(y, [-1, 1]), unigrams)
-      ns = tf.reshape(ns, [batch_size, num_steps, num_sampled])
+      y_list = tf.unpack(y, axis=1)
+      ns_list = []
+      for i in range(num_steps):
+        ns = get_neg_samples(batch_size, num_true, num_sampled, vocab_size, y_list[i], unigrams)
+        ns_list.append(ns)
     else:
       ns = None
+    '''
+    ns = None
     return x, y, ns
