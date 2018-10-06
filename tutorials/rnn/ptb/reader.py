@@ -36,10 +36,10 @@ def _build_vocab(filename):
   counter = collections.Counter(data)
   count_pairs = sorted(counter.items(), key=lambda x: (-x[1], x[0]))
 
-  words, _ = list(zip(*count_pairs))
+  words, counts = list(zip(*count_pairs))
   word_to_id = dict(zip(words, range(len(words))))
 
-  return word_to_id
+  return word_to_id, counts
 
 
 def _file_to_word_ids(filename, word_to_id):
@@ -70,15 +70,32 @@ def ptb_raw_data(data_path=None):
   valid_path = os.path.join(data_path, "ptb.valid.txt")
   test_path = os.path.join(data_path, "ptb.test.txt")
 
-  word_to_id = _build_vocab(train_path)
+  word_to_id, unigrams = _build_vocab(train_path)
   train_data = _file_to_word_ids(train_path, word_to_id)
   valid_data = _file_to_word_ids(valid_path, word_to_id)
   test_data = _file_to_word_ids(test_path, word_to_id)
   vocabulary = len(word_to_id)
-  return train_data, valid_data, test_data, vocabulary
+  return train_data, valid_data, test_data, vocabulary, unigrams
 
-
-def ptb_producer(raw_data, batch_size, num_steps, name=None):
+def get_neg_samples(batch_size, num_true, num_sampled, vocab_size, true_classes, unigrams):
+  unigrams = list(unigrams)
+  if len(unigrams) < vocab_size:
+    unigrams += [0]*(vocab_size-len(unigrams))
+  neg_samples = []
+  for i in range(batch_size):
+    samples, _, _ = tf.nn.fixed_unigram_candidate_sampler(
+                  true_classes=true_classes,
+                  num_true=num_true,
+                  num_sampled=num_sampled,
+                  unique=False,
+                  range_max=vocab_size,
+                  distortion=0.75,
+                  unigrams=unigrams
+               )
+    neg_samples.append(tf.reshape(samples, [1, -1]))
+  return tf.stack(neg_samples)
+ 
+def ptb_producer(raw_data, unigrams, batch_size, num_steps, num_true, num_sampled, vocab_size, name=None):
   """Iterate on the raw PTB data.
 
   This chunks up raw_data into batches of examples and returns Tensors that
@@ -98,7 +115,7 @@ def ptb_producer(raw_data, batch_size, num_steps, name=None):
     tf.errors.InvalidArgumentError: if batch_size or num_steps are too high.
   """
   with tf.name_scope(name, "PTBProducer", [raw_data, batch_size, num_steps]):
-    raw_data = tf.convert_to_tensor(raw_data, name="raw_data", dtype=tf.int32)
+    raw_data = tf.convert_to_tensor(raw_data, name="raw_data", dtype=tf.int64)
 
     data_len = tf.size(raw_data)
     batch_len = data_len // batch_size
@@ -119,4 +136,9 @@ def ptb_producer(raw_data, batch_size, num_steps, name=None):
     y = tf.strided_slice(data, [0, i * num_steps + 1],
                          [batch_size, (i + 1) * num_steps + 1])
     y.set_shape([batch_size, num_steps])
-    return x, y
+    if num_sampled > 0:
+      ns = get_neg_samples(batch_size*num_steps, num_true, num_sampled, vocab_size, tf.reshape(y, [-1, 1]), unigrams)
+      ns = tf.reshape(ns, [batch_size, num_steps, num_sampled])
+    else:
+      ns = None
+    return x, y, ns

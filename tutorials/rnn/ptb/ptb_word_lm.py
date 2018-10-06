@@ -57,26 +57,56 @@ from __future__ import division
 from __future__ import print_function
 
 import time
+import argparse as ap
 
 import numpy as np
 import tensorflow as tf
 
 import reader
 
-flags = tf.flags
 logging = tf.logging
 
+flags = tf.flags
 flags.DEFINE_string(
     "model", "small",
-    "A type of model. Possible options are: small, medium, large, custom.")
+    "A type of model. Possible options are: small, medium, large, custom")
 flags.DEFINE_string("data_path", None,
-                    "Where the training/test data is stored.")
+                    "Where the training/test data is stored")
 flags.DEFINE_string("save_path", None,
-                    "Model output directory.")
+                    "Model output directory")
 flags.DEFINE_bool("use_fp16", False,
                   "Train using 16-bit floats instead of 32bit floats")
-
-FLAGS = flags.FLAGS
+flags.DEFINE_float("init_scale", 0.1, 
+                   "Range for the uniform random initializer")
+flags.DEFINE_float("learning_rate", 1.0,
+                   "Initial learning rate")
+flags.DEFINE_float("max_grad_norm", 5,
+                   "Max norm for gradient truncation")
+flags.DEFINE_integer("num_layers", 2,
+                     "Number of layers for recurent neural network")
+flags.DEFINE_integer("num_steps", 20,
+                     "Context size for the language model")
+flags.DEFINE_integer("hidden_size", 200,
+                     "Size of the hidden layers")
+flags.DEFINE_integer("max_epoch", 4,
+                     "Maximum number of epoches with initial learning rate")
+flags.DEFINE_integer("max_max_epoch", 20,
+                     "Tolal number of epoches")
+flags.DEFINE_float("keep_prob", 1.0,
+                   "Keep probability for drop out")
+flags.DEFINE_float("lr_decay", 0.70,
+                   "Multiplier for learning rate decay after max_epoch iterations")
+flags.DEFINE_integer("batch_size", 20,
+                     "Batch size")
+flags.DEFINE_integer("vocab_size", 10000,
+                     "Vocabulary size for the language model")
+flags.DEFINE_float("exp", 1.0,
+                   "Exponent for the dot-product similarity measure")
+flags.DEFINE_integer("num_neg_samples", 0,
+                     "Number of negative samples. 0 for no down-sampling")
+flags.DEFINE_string("loss_func", "logistic",
+                    "Loss function to be used. Can be one of (logistic/softmax)")
+FLAGS=flags.FLAGS
 
 
 def data_type():
@@ -152,41 +182,25 @@ class PTBModel(object):
     softmax_w = tf.get_variable(
         "softmax_w", [size, vocab_size], dtype=data_type())
     logits = tf.matmul(output, softmax_w)
-    # softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-    # logits = tf.matmul(output, softmax_w) + softmax_b
+    sign_logits = tf.sign(logits)
+    logits = tf.multiply(sign_logits, tf.pow(tf.abs(logits), config.exp))
 
     perp = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
         [logits],
         [tf.reshape(input_.targets, [-1])],
         [tf.ones([batch_size * num_steps], dtype=data_type())])
 
-    '''
-    def get_weights(targets, neg_samples, batch_size, vocab_size):
-      pos_samples = tf.reshape(targets, [-1, 1])
-      active_samples = tf.concat([pos_samples, neg_samples], axis=1)
-      weights = tf.zeros([batch_size, vocab_size])
-      for sample in tf.unstack(active_samples, axis=1):
-        weights = tf.maximum(weights, tf.one_hot(sample, vocab_size))
-      return weights
-    if (num_neg_samples > 0):
-      weights = get_weights(input_.targets, tf.reshape(input_.neg_samples, [-1, num_neg_samples]), batch_size*num_steps, vocab_size)
-    else:
-      weights = tf.ones([batch_size * num_steps, vocab_size], dtype=data_type())
-    cost = tf.losses.mean_squared_error(
-        labels,
-        logits,
-        weights) 
-    if num_neg_samples > 0:
-        self._cost = cost = cost * (num_neg_samples + 1);
-    else:
-        self._cost = cost = cost * vocab_size;
-    '''
-    labels = tf.one_hot(tf.reshape(input_.targets, [-1]), vocab_size)
-    self._cost = cost = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(
-            labels=labels,
-            logits=logits)) / batch_size
+    self._perp_op = tf.reduce_sum(perp) / batch_size
 
-    self._perp_op = (tf.reduce_sum(perp) / batch_size, tf.reduce_mean(tf.abs(logits)), tf.reduce_mean(tf.abs(tf.gather(softmax_w, tf.reshape(input_.targets, [-1]), axis=1))))
+    if config.loss_func == 'logistic':
+        labels = tf.one_hot(tf.reshape(input_.targets, [-1]), vocab_size)
+        self._cost = cost = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(
+                                          labels=labels,
+                                          logits=logits)) / batch_size
+    elif config.loss_func == 'softmax':
+        self._cost = cost = self._perp_op
+    else:
+        print('Loss function should be either "logistic" or "softmax"')
 
     self._final_state = state
 
@@ -252,11 +266,12 @@ class SmallConfig(object):
   num_steps = 20
   hidden_size = 200
   max_epoch = 1
-  max_max_epoch = 20
+  max_max_epoch = 50
   keep_prob = 1.0
-  lr_decay = 0.7
-  batch_size = 100
+  lr_decay = 0.5
+  batch_size = 20
   vocab_size = 10000
+  exp = 1.0
   num_neg_samples = 0
 
 
@@ -274,7 +289,8 @@ class MediumConfig(object):
   lr_decay = 0.8
   batch_size = 20
   vocab_size = 10000
-  num_neg_samples = 20
+  exp = 1.0
+  num_neg_samples = 0
 
 
 class LargeConfig(object):
@@ -291,7 +307,8 @@ class LargeConfig(object):
   lr_decay = 1 / 1.15
   batch_size = 20
   vocab_size = 10000
-  num_neg_samples = 20
+  exp = 1.0
+  num_neg_samples = 0
 
 
 class TestConfig(object):
@@ -308,7 +325,27 @@ class TestConfig(object):
   lr_decay = 0.5
   batch_size = 20
   vocab_size = 10000
+  exp = 1.0
   num_neg_samples = 20
+
+
+class CustomConfig(object):
+  """Custom config."""
+  init_scale = FLAGS.init_scale
+  learning_rate = FLAGS.learning_rate
+  max_grad_norm = FLAGS.max_grad_norm
+  num_layers = FLAGS.num_layers
+  num_steps = FLAGS.num_steps
+  hidden_size = FLAGS.hidden_size
+  max_epoch = FLAGS.max_epoch
+  max_max_epoch = FLAGS.max_max_epoch
+  keep_prob = FLAGS.keep_prob
+  lr_decay = FLAGS.lr_decay
+  batch_size = FLAGS.batch_size
+  vocab_size = FLAGS.vocab_size
+  exp = FLAGS.exp
+  num_neg_samples = FLAGS.num_neg_samples
+  loss_func = FLAGS.loss_func
 
 
 def run_epoch(session, model, eval_op=None, verbose=False):
@@ -339,11 +376,8 @@ def run_epoch(session, model, eval_op=None, verbose=False):
     perp = vals["perplexity"]
     state = vals["final_state"]
 
-    #print(str(perp))
-    #print(str(vals["grad"]))
-
     costs += cost
-    perplexity += perp[0]
+    perplexity += perp
     iters += model.input.num_steps
 
     if verbose and step % (model.input.epoch_size // 10) == 10:
@@ -363,6 +397,8 @@ def get_config():
     return LargeConfig()
   elif FLAGS.model == "test":
     return TestConfig()
+  elif FLAGS.model == "custom":
+    return CustomConfig()
   else:
     raise ValueError("Invalid model: %s", FLAGS.model)
 
@@ -418,12 +454,13 @@ def main(_):
         _, valid_perplexity = run_epoch(session, mvalid)
         print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
 
-      _, test_perplexity = run_epoch(session, mtest)
-      print("Test Perplexity: %.3f" % test_perplexity)
+        _, test_perplexity = run_epoch(session, mtest)
+        print("Test Perplexity: %.3f" % test_perplexity)
 
-      if FLAGS.save_path:
-        print("Saving model to %s." % FLAGS.save_path)
-        sv.saver.save(session, FLAGS.save_path, global_step=sv.global_step)
+        if FLAGS.save_path and (i+1) % 5 == 0:
+          save_path = FLAGS.save_path + '_' + str(i+1)
+          print("Saving model to %s." % save_path)
+          sv.saver.save(session, save_path, global_step=sv.global_step)
 
 
 if __name__ == "__main__":
