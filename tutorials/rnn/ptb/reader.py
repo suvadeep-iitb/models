@@ -23,6 +23,7 @@ import collections
 import os
 
 import tensorflow as tf
+import numpy as np
 
 
 def _read_words(filename):
@@ -77,6 +78,27 @@ def ptb_raw_data(data_path=None):
   vocabulary = len(word_to_id)
   return train_data, valid_data, test_data, vocabulary, unigrams
 
+
+def get_label_bucket_masks(vocab_size):
+  label_buckets = [range(10), range(10, 100), range(100, 1000), range(1000, vocab_size)]
+  label_bucket_masks = []
+  for lb in label_buckets:
+    lbm = np.zeros((vocab_size), dtype=np.float32)
+    lbm[lb] = 1.0
+    label_bucket_masks.append(tf.convert_to_tensor(lbm))
+  return label_bucket_masks
+    
+
+def get_split_weights_for_perp(y, unigrams, vocab_size, batch_size):
+  lbm_list = get_label_bucket_masks(vocab_size)
+  one_hot_y = tf.one_hot(y, vocab_size)
+  split_weights = []
+  for lbm in lbm_list:
+    wgt = tf.matmul(one_hot_y, tf.reshape(lbm, [-1, 1]))
+    split_weights.append(tf.reshape(wgt, [-1]))
+  return split_weights
+
+
 def get_neg_samples(batch_size, num_true, num_sampled, vocab_size, true_classes, unigrams):
   unigrams = list(unigrams)
   if len(unigrams) < vocab_size:
@@ -91,7 +113,8 @@ def get_neg_samples(batch_size, num_true, num_sampled, vocab_size, true_classes,
                   unigrams=unigrams
                )
   return neg_samples
- 
+
+
 def ptb_producer(raw_data, unigrams, batch_size, num_steps, num_true, num_sampled, vocab_size, name=None):
   """Iterate on the raw PTB data.
 
@@ -133,6 +156,13 @@ def ptb_producer(raw_data, unigrams, batch_size, num_steps, num_true, num_sample
     y = tf.strided_slice(data, [0, i * num_steps + 1],
                          [batch_size, (i + 1) * num_steps + 1])
     y.set_shape([batch_size, num_steps])
+    ns = None
+
+    psw_list = get_split_weights_for_perp(tf.reshape(y, [-1]), unigrams, vocab_size, batch_size*num_steps)
+    
+    for i in range(len(psw_list)):
+      psw_list[i] = tf.reshape(psw_list[i], [batch_size, num_steps])
+
     '''
     if num_sampled > 0:
       y_list = tf.unpack(y, axis=1)
@@ -143,5 +173,6 @@ def ptb_producer(raw_data, unigrams, batch_size, num_steps, num_true, num_sample
     else:
       ns = None
     '''
-    ns = None
-    return x, y, ns
+
+    return x, y, ns, psw_list
+

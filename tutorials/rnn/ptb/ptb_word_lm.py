@@ -121,7 +121,7 @@ class PTBInput(object):
     self.num_steps = num_steps = config.num_steps
     self.epoch_size = ((len(data) // batch_size) - 1) // num_steps
     self.num_sampled = num_sampled = config.num_neg_samples
-    self.input_data, self.targets, self.neg_samples = reader.ptb_producer(
+    self.input_data, self.targets, self.neg_samples, self.split_wgts = reader.ptb_producer(
         data, unigrams, batch_size, num_steps, 1, num_sampled, vocab_size, name=name)
 
 
@@ -186,11 +186,22 @@ class PTBModel(object):
     logits = tf.multiply(sign_logits, tf.pow(tf.abs(logits), config.exp))
 
     perp = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
-        [logits],
-        [tf.reshape(input_.targets, [-1])],
-        [tf.ones([batch_size * num_steps], dtype=data_type())])
+               [logits],
+               [tf.reshape(input_.targets, [-1])],
+               [tf.ones([batch_size * num_steps], dtype=data_type())],
+               average_across_timesteps=False)
 
     self._perp_op = tf.reduce_sum(perp) / batch_size
+
+    self._splitted_perp_op = []
+    for sw in input_.split_wgts:
+        pr = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
+                  [logits],
+                  [tf.reshape(input_.targets, [-1])],
+                  [tf.reshape(sw, [-1])],
+                  average_across_timesteps=False)
+        pr = tf.reduce_sum(pr) / batch_size
+        self._splitted_perp_op.append(pr)
 
     if config.loss_func == 'logistic':
         labels = tf.one_hot(tf.reshape(input_.targets, [-1]), vocab_size)
@@ -255,6 +266,10 @@ class PTBModel(object):
   @property
   def perplexity_op(self):
     return self._perp_op
+
+  @property
+  def splitted_perplexity_op(self):
+    return self._splitted_perp_op
 
 
 class SmallConfig(object):
@@ -357,6 +372,7 @@ def run_epoch(session, model, eval_op=None, verbose=False):
   start_time = time.time()
   costs = 0.0
   perplexity = 0.0
+  splitted_perp = [0.0]*len(model._input.split_wgts)
   iters = 0
   state = session.run(model.initial_state)
 
@@ -364,7 +380,8 @@ def run_epoch(session, model, eval_op=None, verbose=False):
       "cost": model.cost,
       "final_state": model.final_state,
       "perplexity": model.perplexity_op,
-      "grad": model._grad_op
+      "grad": model._grad_op,
+      "splitted_perp": model.splitted_perplexity_op,
   }
   if eval_op is not None:
     fetches["eval_op"] = eval_op
@@ -379,9 +396,13 @@ def run_epoch(session, model, eval_op=None, verbose=False):
     cost = vals["cost"]
     perp = vals["perplexity"]
     state = vals["final_state"]
-
+    sp_perp = vals["splitted_perp"]
+     
     costs += cost
     perplexity += perp
+    for i, sp in enumerate(sp_perp):
+      splitted_perp[i] += sp
+
     iters += model.input.num_steps
 
     if verbose and step % (model.input.epoch_size // 10) == 10:
@@ -389,7 +410,8 @@ def run_epoch(session, model, eval_op=None, verbose=False):
             (step * 1.0 / model.input.epoch_size, costs / iters,
              iters * model.input.batch_size / (time.time() - start_time)))
 
-  return costs / iters, np.exp(perplexity / iters)
+  splitted_perp = [np.exp(sp/iters) for sp in splitted_perp]
+  return costs/iters, np.exp(perplexity/iters), splitted_perp
 
 
 def get_config():
@@ -452,14 +474,17 @@ def main(_):
         m.assign_lr(session, config.learning_rate * lr_decay)
 
         print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
-        _, train_perplexity = run_epoch(session, m, eval_op=m.train_op,
-                                     verbose=True)
-        print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-        _, valid_perplexity = run_epoch(session, mvalid)
-        print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
+        _, train_perplexity, train_sp_perp = run_epoch(session, m, eval_op=m.train_op, verbose=True)
+        train_sp_perp = [str(sp) for sp in train_sp_perp]
+        print("Epoch: %d Train Perplexity: %.3f (%s)" % (i + 1, train_perplexity, '/'.join(train_sp_perp)))
 
-        _, test_perplexity = run_epoch(session, mtest)
-        print("Test Perplexity: %.3f" % test_perplexity)
+        _, valid_perplexity, valid_sp_perp = run_epoch(session, mvalid)
+        valid_sp_perp = [str(sp) for sp in valid_sp_perp]
+        print("Epoch: %d Valid Perplexity: %.3f (%s)" % (i + 1, valid_perplexity, '/'.join(valid_sp_perp)))
+
+        _, test_perplexity, test_sp_perp = run_epoch(session, mtest)
+        test_sp_perp = [str(sp) for sp in test_sp_perp]
+        print("Epoch: %d Test Perplexity: %.3f (%s)" % (i + 1, test_perplexity, '/'.join(test_sp_perp)))
 
         if FLAGS.save_path and (i+1) % 5 == 0:
           save_path = FLAGS.save_path + '_' + str(i+1)
