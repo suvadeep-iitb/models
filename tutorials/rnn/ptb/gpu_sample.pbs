@@ -1,0 +1,32 @@
+#!/bin/bash
+#
+#  qsub gpu_sample.moab
+#
+#PBS -N test_gpu
+#PBS -l walltime=01:15:00
+#PBS -l select=1:ncpus=5:accelerator=True:vntype=cray_compute
+#PBS -l place=pack
+#PBS -q gpuq
+#PBS -j oe
+#PBS -o gpu_sample.log
+#PBS -S /bin/bash
+#PBS -V
+
+cd $PBS_O_WORKDIR
+
+module switch PrgEnv-cray PrgEnv-gnu
+module switch gcc gcc/6.3.0
+module load /home/apps/anaconda3/modulefiles/anaconda3/5.2.0
+module load craype-broadwell
+module load craype-accel-nvidia60
+
+DATA_PATH='../../../../simple-examples/data/'
+MODEL='small'
+
+echo ''
+aprun -n 1 python3 ptb_word_lm.py --data_path=$DATA_PATH --model=$MODEL
+echo 'Exp completed successfully'
+
+module unload /home/apps/anaconda3/modulefiles/anaconda3/5.2.0
+module unload craype-broadwell
+module unload craype-accel-nvidia60

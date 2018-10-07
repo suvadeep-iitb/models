@@ -1,0 +1,31 @@
+#!/bin/bash
+#
+#  qsub gpu_exp.moab
+#
+#PBS -N PTB_EXP
+#PBS -l walltime=03:00:00
+#PBS -l select=1:ncpus=5:accelerator=True:vntype=cray_compute
+#PBS -l place=pack
+#PBS -q gpuq
+#PBS -j oe
+#PBS -S /bin/bash
+#PBS -V
+
+cd $PBS_O_WORKDIR
+
+
+module switch PrgEnv-cray PrgEnv-gnu
+module switch gcc gcc/6.3.0
+module load /home/apps/anaconda3/modulefiles/anaconda3/5.2.0
+module load craype-broadwell
+module load craype-accel-nvidia60
+
+
+echo 'aprun -n 1 python ptb_word_lm.py --data_path='${DATA_PATH}' --model='${MODEL}' --learning_rate='${LR}' --lr_decay='${LR_DECAY}' --exp='${EXP}' --batch_size='${BATCH_SIZE}' --max_max_epoch='${MAX_MAX_EPOCH}' --max_epoch='${MAX_EPOCH}' --hidden_size='${HIDDEN_SIZE}' --loss_func='${LOSS_FUNC}' --num_steps='${NUM_STEPS} > ${OUTPUT}
+aprun -n 1 python ptb_word_lm.py --data_path=${DATA_PATH} --model=${MODEL} --learning_rate=${LR} --lr_decay=${LR_DECAY} --exp=${EXP} --batch_size=${BATCH_SIZE} --max_max_epoch=${MAX_MAX_EPOCH} --max_epoch=${MAX_EPOCH} --hidden_size=${HIDDEN_SIZE} --loss_func=${LOSS_FUNC} --num_steps=${NUM_STEPS} >> ${OUTPUT}
+
+
+module unload /home/apps/anaconda3/modulefiles/anaconda3/5.2.0
+module unload craype-broadwell
+module unload craype-accel-nvidia60
+
