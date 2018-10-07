@@ -468,13 +468,16 @@ def main(_):
                          input_=test_input)
 
     sv = tf.train.Supervisor(logdir=FLAGS.save_path)
+
+    min_val_perp = 10000
+    counter = 0
     with sv.managed_session() as session:
       for i in range(config.max_max_epoch):
         lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
         m.assign_lr(session, config.learning_rate * lr_decay)
 
         print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
-        _, train_perplexity, train_sp_perp = run_epoch(session, m, eval_op=m.train_op, verbose=True)
+        tr_cost, train_perplexity, train_sp_perp = run_epoch(session, m, eval_op=m.train_op, verbose=True)
         train_sp_perp = [str(sp) for sp in train_sp_perp]
         print("Epoch: %d Train Perplexity: %.3f (%s)" % (i + 1, train_perplexity, '/'.join(train_sp_perp)))
 
@@ -491,6 +494,17 @@ def main(_):
           print("Saving model to %s." % save_path)
           sv.saver.save(session, save_path, global_step=sv.global_step)
 
+        if np.isinf(tr_cost) or np.isnan(tr_cost):
+            break
+
+        if i > 4:
+          if min_val_perp - valid_perplexity > 0.3:
+            counter = 0
+            min_val_perp = valid_perplexity
+          elif min_val_perp - valid_perplexity < -3.0 or counter > 3:
+            break
+          else:
+            counter += 1
 
 if __name__ == "__main__":
   tf.app.run()
